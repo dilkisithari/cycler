@@ -1,0 +1,392 @@
+package lk.nd.cycler.database;
+
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.util.Log;
+
+import com.google.android.gms.maps.model.LatLng;
+
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.InvalidKeySpecException;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
+
+import lk.nd.cycler.model.LocationCard;
+import lk.nd.cycler.model.OngoingRental;
+import lk.nd.cycler.model.PaymentHistoryCard;
+
+public class DatabaseHelper extends SQLiteOpenHelper {
+
+    private static final String DATABASE_NAME = "app_database";
+    private static final int DATABASE_VERSION = 1;
+
+    // User Table
+    public static final String TABLE_USER = "user";
+    public static final String COLUMN_USER_ID = "user_id";
+    public static final String COLUMN_USERNAME = "username";
+    public static final String COLUMN_EMAIL = "email";
+    public static final String COLUMN_MOBILE = "mobile";
+    public static final String COLUMN_PASSWORD = "password";
+
+    // Location Table
+    public static final String TABLE_SHOP = "shop";
+    public static final String COLUMN_ID = "id";
+    public static final String COLUMN_SHOP_NAME = "shop_name";
+    public static final String COLUMN_LOCATION = "location";
+    public static final String COLUMN_RATING = "rating";
+    public static final String COLUMN_BICYCLE_COUNT = "bicycle_count";
+    public static final String COLUMN_IMAGE_URL = "image_url";
+    public static final String COLUMN_LATITUDE = "latitude";
+    public static final String COLUMN_LONGITUDE = "longitude";
+    public static final String COLUMN_PRICE_PER_HOUR = "price_per_hour";
+
+    // Rental Table
+    public static final String TABLE_RENTAL = "rental";
+
+    // SQL for creating tables
+    private static final String CREATE_TABLE_USER =
+            "CREATE TABLE " + TABLE_USER + " (" +
+                    COLUMN_USER_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    COLUMN_USERNAME + " TEXT, " +
+                    COLUMN_EMAIL + " TEXT, " +
+                    COLUMN_MOBILE + " TEXT, " +
+                    COLUMN_PASSWORD + " TEXT" +
+                    ");";
+
+    private static final String CREATE_TABLE_SHOP =
+            "CREATE TABLE " + TABLE_SHOP + " (" +
+                    COLUMN_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    COLUMN_SHOP_NAME + " TEXT, " +
+                    COLUMN_LOCATION + " TEXT, " +
+                    COLUMN_RATING + " TEXT, " +
+                    COLUMN_BICYCLE_COUNT + " INTEGER, " +
+                    COLUMN_IMAGE_URL + " TEXT, " +
+                    COLUMN_LATITUDE + " REAL, " +
+                    COLUMN_LONGITUDE + " REAL, " +
+                    COLUMN_PRICE_PER_HOUR + " INTEGER" +
+                    ");";
+
+    private static final String CREATE_TABLE_RENTAL =
+            "CREATE TABLE " + TABLE_RENTAL + " (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "user_id INTEGER, " +
+                    "shop_id INTEGER, " +
+                    "shop_name TEXT, " +
+                    "rented_cycle_count INTEGER, " +
+                    "rented_date_time INTEGER, " +
+                    "status TEXT, " +
+                    "payment_per_hour INTEGER, " +
+                    "hour_count INTEGER DEFAULT 0, " +
+                    "total_paid_amount INTEGER DEFAULT 0" +
+                    ");";
+
+    public DatabaseHelper(Context context) {
+        super(context, DATABASE_NAME, null, DATABASE_VERSION);
+    }
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+        // Create all tables for version 1
+        db.execSQL(CREATE_TABLE_USER);  // Create user table
+        db.execSQL(CREATE_TABLE_SHOP);  // Create location/shop table
+        db.execSQL(CREATE_TABLE_RENTAL); // Create rental table
+    }
+
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        // Since this is version 1, there are no upgrades to handle.
+        // You can leave this method empty or remove it entirely if not needed.
+    }
+
+    // ------------------------ USER METHODS ------------------------
+
+    // ---- Password hashing (salted PBKDF2). Stored as "<saltHex>:<hashHex>" ----
+    private static final int HASH_ITERATIONS = 65536;
+    private static final int HASH_BITS = 256;
+
+    private static String hashPassword(String password, byte[] salt) {
+        try {
+            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, HASH_ITERATIONS, HASH_BITS);
+            byte[] hash = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).getEncoded();
+            return toHex(salt) + ":" + toHex(hash);
+        } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
+            throw new IllegalStateException("Password hashing unavailable", e);
+        }
+    }
+
+    private static String hashPassword(String password) {
+        byte[] salt = new byte[16];
+        new SecureRandom().nextBytes(salt);
+        return hashPassword(password, salt);
+    }
+
+    private static boolean verifyPassword(String password, String stored) {
+        if (stored == null) return false;
+        int sep = stored.indexOf(':');
+        if (sep < 0) {
+            // Legacy plain-text row from an older version of the app
+            return stored.equals(password);
+        }
+        byte[] salt = fromHex(stored.substring(0, sep));
+        return hashPassword(password, salt).equals(stored);
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private static byte[] fromHex(String hex) {
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
+        }
+        return out;
+    }
+
+    // Insert user
+    public long insertUser(String username, String email, String mobile, String password) {
+        SQLiteDatabase db = this.getWritableDatabase();
+
+        ContentValues values = new ContentValues();
+        values.put(COLUMN_USERNAME, username);
+        values.put(COLUMN_EMAIL, email);
+        values.put(COLUMN_MOBILE, mobile);
+        values.put(COLUMN_PASSWORD, hashPassword(password));
+
+        long result = db.insert(TABLE_USER, null, values);
+        db.close();
+        return result;
+    }
+
+    // Check if a user exists by email or phone number
+    public boolean checkIfUserExists(String email, String mobile) {
+        SQLiteDatabase db = this.getReadableDatabase();
+        try (Cursor cursor = db.query(TABLE_USER, null,
+                COLUMN_EMAIL + " = ? OR " + COLUMN_MOBILE + " = ?",
+                new String[]{email, mobile}, null, null, null)) {
+            return cursor.getCount() > 0;
+        }
+    }
+
+    // Check user credentials
+    public boolean checkUserCredentials(String email, String password) {
+        SQLiteDatabase db = this.getReadableDatabase();
+        String stored = null;
+        try (Cursor cursor = db.query(TABLE_USER, new String[]{COLUMN_PASSWORD},
+                COLUMN_EMAIL + " = ?", new String[]{email}, null, null, null)) {
+            if (cursor.moveToFirst()) {
+                stored = cursor.getString(0);
+            }
+        }
+
+        if (!verifyPassword(password, stored)) {
+            return false;
+        }
+
+        // Upgrade legacy plain-text passwords to a salted hash on successful login
+        if (stored != null && stored.indexOf(':') < 0) {
+            ContentValues values = new ContentValues();
+            values.put(COLUMN_PASSWORD, hashPassword(password));
+            getWritableDatabase().update(TABLE_USER, values, COLUMN_EMAIL + " = ?", new String[]{email});
+        }
+        return true;
+    }
+
+    // Get user details by email
+    public Cursor getUserDetailsByEmail(String email) {
+        SQLiteDatabase db = this.getReadableDatabase();
+        String query = "SELECT * FROM " + TABLE_USER + " WHERE " + COLUMN_EMAIL + " = ?";
+        return db.rawQuery(query, new String[]{email});
+    }
+
+    // ------------------------ SHOP METHODS ------------------------
+
+    // Add location/shop
+    public void addLocation(LocationCard location) {
+        SQLiteDatabase db = this.getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put(COLUMN_SHOP_NAME, location.getShopName());
+        values.put(COLUMN_LOCATION, location.getLocation());
+        values.put(COLUMN_RATING, location.getRating());
+        values.put(COLUMN_BICYCLE_COUNT, location.getBicycleCount());
+        values.put(COLUMN_IMAGE_URL, location.getImageUrl());
+        values.put(COLUMN_LATITUDE, location.getLatLng().latitude);
+        values.put(COLUMN_LONGITUDE, location.getLatLng().longitude);
+        values.put(COLUMN_PRICE_PER_HOUR, location.getPricePerHour());
+
+        Log.d("Database", "Inserting shop: " + location.getShopName() +
+                ", Price per hour: " + location.getPricePerHour());
+
+        long result = db.insert(TABLE_SHOP, null, values);
+        if (result == -1) {
+            Log.e("Database", "Error inserting data.");
+        } else {
+            Log.d("Database", "Data inserted successfully.");
+        }
+        db.close();
+    }
+
+    // Get all locations
+    public List<LocationCard> getAllLocations() {
+        List<LocationCard> locationList = new ArrayList<>();
+        String selectQuery = "SELECT * FROM " + TABLE_SHOP;
+
+        SQLiteDatabase db = this.getReadableDatabase();
+        Cursor cursor = db.rawQuery(selectQuery, null);
+
+        if (cursor.moveToFirst()) {
+            do {
+                int idIndex = cursor.getColumnIndex(COLUMN_ID);
+                int shopNameIndex = cursor.getColumnIndex(COLUMN_SHOP_NAME);
+                int locationIndex = cursor.getColumnIndex(COLUMN_LOCATION);
+                int ratingIndex = cursor.getColumnIndex(COLUMN_RATING);
+                int bicycleCountIndex = cursor.getColumnIndex(COLUMN_BICYCLE_COUNT);
+                int imageUrlIndex = cursor.getColumnIndex(COLUMN_IMAGE_URL);
+                int latitudeIndex = cursor.getColumnIndex(COLUMN_LATITUDE);
+                int longitudeIndex = cursor.getColumnIndex(COLUMN_LONGITUDE);
+                int pricePerHourIndex = cursor.getColumnIndex(COLUMN_PRICE_PER_HOUR);
+
+                if (idIndex >= 0 && shopNameIndex >= 0 && locationIndex >= 0 && ratingIndex >= 0 &&
+                        bicycleCountIndex >= 0 && imageUrlIndex >= 0 && latitudeIndex >= 0 && longitudeIndex >= 0 &&
+                        pricePerHourIndex >= 0) {
+
+                    LocationCard location = new LocationCard(
+                            cursor.getInt(idIndex),
+                            cursor.getString(shopNameIndex),
+                            cursor.getString(locationIndex),
+                            cursor.getString(ratingIndex),
+                            cursor.getInt(bicycleCountIndex),
+                            cursor.getString(imageUrlIndex),
+                            new LatLng(cursor.getDouble(latitudeIndex), cursor.getDouble(longitudeIndex)),
+                            cursor.getInt(pricePerHourIndex)
+                    );
+                    locationList.add(location);
+                } else {
+                    Log.e("Database", "One or more columns are missing in the result set.");
+                }
+
+            } while (cursor.moveToNext());
+        }
+
+        cursor.close();
+
+        db.close();
+        return locationList;
+    }
+
+    public void updateBicycleCount(int shopId, int rentedCycleCount) {
+        SQLiteDatabase db = this.getWritableDatabase();
+
+        // Get current bicycle count
+        Cursor cursor = db.rawQuery("SELECT " + COLUMN_BICYCLE_COUNT + " FROM " + TABLE_SHOP + " WHERE " + COLUMN_ID + " = ?",
+                new String[]{String.valueOf(shopId)});
+
+        if (cursor.moveToFirst()) {
+            int currentCount = cursor.getInt(0);
+            int newCount = currentCount + rentedCycleCount; // Increment bicycle count
+
+            ContentValues values = new ContentValues();
+            values.put(COLUMN_BICYCLE_COUNT, newCount);
+
+            db.update(TABLE_SHOP, values, COLUMN_ID + " = ?", new String[]{String.valueOf(shopId)});
+        }
+
+        cursor.close();
+        db.close();
+    }
+
+
+    // ------------------------ RENTAL METHODS ------------------------
+
+    // Insert rental data
+    public void insertRental(long userId, int shopId, String shopName, int rentedCycleCount,
+                             long rentedDateTime, String status, int paymentPerHour) {
+        SQLiteDatabase db = this.getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("user_id", userId);
+        values.put("shop_id", shopId);
+        values.put("shop_name", shopName);
+        values.put("rented_cycle_count", rentedCycleCount);
+        values.put("rented_date_time", rentedDateTime);
+        values.put("status", status);
+        values.put("payment_per_hour", paymentPerHour);
+        values.put("hour_count", 0);
+        values.put("total_paid_amount", 0);
+
+        db.insert(TABLE_RENTAL, null, values);
+        db.close();
+    }
+
+    public void updateRentalStatusAndPayment(int rentalId, int hourCount, int totalAmount) {
+        SQLiteDatabase db = this.getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("hour_count", hourCount);
+        values.put("total_paid_amount", totalAmount);
+        values.put("status", "Completed");
+
+        db.update(TABLE_RENTAL, values, "id = ?", new String[]{String.valueOf(rentalId)});
+        db.close();
+    }
+
+    public List<OngoingRental> getOngoingRentalsByUserId(int userId) {
+        List<OngoingRental> rentals = new ArrayList<>();
+        SQLiteDatabase db = this.getReadableDatabase();
+
+        String query = "SELECT * FROM rental WHERE user_id = ? AND status = 'Pending'"; // Adjust column names if needed
+        Cursor cursor = db.rawQuery(query, new String[]{String.valueOf(userId)});
+
+        if (cursor.moveToFirst()) {
+            do {
+                int rentalId = cursor.getInt(cursor.getColumnIndexOrThrow("id"));
+                int locationId = cursor.getInt(cursor.getColumnIndexOrThrow("shop_id"));
+                String shopName = cursor.getString(cursor.getColumnIndexOrThrow("shop_name"));
+                int quantity = cursor.getInt(cursor.getColumnIndexOrThrow("rented_cycle_count"));
+                long rentedDateTime = cursor.getLong(cursor.getColumnIndexOrThrow("rented_date_time"));
+                String status = cursor.getString(cursor.getColumnIndexOrThrow("status"));
+                int paymentPerHour = cursor.getInt(cursor.getColumnIndexOrThrow("payment_per_hour"));
+
+                rentals.add(new OngoingRental(rentalId, locationId, shopName, quantity, new Date(rentedDateTime), status, paymentPerHour));
+            } while (cursor.moveToNext());
+        }
+
+        cursor.close();
+        db.close();
+        return rentals;
+    }
+
+    public List<PaymentHistoryCard> getPaymentHistoryByUserId(int userId) {
+        List<PaymentHistoryCard> paymentHistory = new ArrayList<>();
+        SQLiteDatabase db = this.getReadableDatabase();
+
+        String query = "SELECT shop_name, rented_cycle_count, total_paid_amount " +
+                "FROM rental WHERE user_id = ? AND status = 'Completed'";
+
+        Cursor cursor = db.rawQuery(query, new String[]{String.valueOf(userId)});
+
+        if (cursor.moveToFirst()) {
+            do {
+                String shopName = cursor.getString(cursor.getColumnIndexOrThrow("shop_name"));
+                int quantity = cursor.getInt(cursor.getColumnIndexOrThrow("rented_cycle_count"));
+                int totalAmount = cursor.getInt(cursor.getColumnIndexOrThrow("total_paid_amount"));
+
+                paymentHistory.add(new PaymentHistoryCard(shopName, quantity, totalAmount));
+            } while (cursor.moveToNext());
+        }
+
+        cursor.close();
+        db.close();
+        return paymentHistory;
+    }
+
+
+}

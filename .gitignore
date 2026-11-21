@@ -1,0 +1,23 @@
+# Gradle / build output
+*.iml
+.gradle/
+/build/
+/app/build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Secrets & machine-specific config (NEVER commit)
+local.properties
+*.keystore
+*.jks
+google-services.json
+
+# IDE
+.idea/
+.vscode/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*~
